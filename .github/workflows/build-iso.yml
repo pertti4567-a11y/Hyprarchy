@@ -1,0 +1,167 @@
+name: Build Omarchy Lite ISO
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+
+    steps:
+      - name: Install archiso
+        run: |
+          pacman -Syu --noconfirm archiso
+
+      - name: Prepare profile
+        run: |
+          set -e
+          rm -rf /tmp/profile
+          cp -r /usr/share/archiso/configs/releng /tmp/profile
+
+          # profiledef.sh
+          sed -i 's/^iso_name=.*/iso_name="omarchy-lite"/' /tmp/profile/profiledef.sh
+          sed -i 's/^iso_label=.*/iso_label="OMARCHY_LITE"/' /tmp/profile/profiledef.sh
+          sed -i 's/^iso_publisher=.*/iso_publisher="Omarchy Lite"/' /tmp/profile/profiledef.sh
+          sed -i 's/^iso_application=.*/iso_application="Omarchy Lite Live"/' /tmp/profile/profiledef.sh
+          sed -i 's/^install_dir=.*/install_dir="arch"/' /tmp/profile/profiledef.sh
+
+          # packages
+          cat >> /tmp/profile/packages.x86_64 <<'PKG'
+          hyprland
+          kitty
+          chromium
+          wofi
+          waybar
+          hyprpaper
+          networkmanager
+          network-manager-applet
+          polkit
+          polkit-gnome
+          xdg-desktop-portal-hyprland
+          xdg-desktop-portal-gtk
+          qt5-wayland
+          qt6-wayland
+          pipewire
+          pipewire-pulse
+          wireplumber
+          pavucontrol
+          grim
+          slurp
+          wl-clipboard
+          cliphist
+          mesa
+          vulkan-radeon
+          vulkan-intel
+          vulkan-nouveau
+          libva-mesa-driver
+          zsh
+          neovim
+          git
+          base-devel
+          linux-headers
+          sudo
+          archinstall
+          PKG
+
+          # overlay dirs
+          mkdir -p /tmp/profile/airootfs/root/.config/hypr
+          mkdir -p /tmp/profile/airootfs/root/.config/waybar
+          mkdir -p /tmp/profile/airootfs/etc/systemd/system/getty@tty1.service.d
+          mkdir -p /tmp/profile/airootfs/etc/systemd/system/multi-user.target.wants
+
+          # autologin root on tty1
+          cat > /tmp/profile/airootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf <<'AUTOLOGIN'
+          [Service]
+          ExecStart=
+          ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
+          AUTOLOGIN
+
+          # start Hyprland from bash_profile
+          cat > /tmp/profile/airootfs/root/.bash_profile <<'PROFILE'
+          [[ -f ~/.bashrc ]] && . ~/.bashrc
+          if [[ -z $DISPLAY && $(tty) == /dev/tty1 ]]; then
+            export HYPRLAND_ALLOW_ROOT=1
+            exec Hyprland
+          fi
+          PROFILE
+
+          # Hyprland config
+          cat > /tmp/profile/airootfs/root/.config/hypr/hyprland.conf <<'HYPR'
+          monitor=,preferred,auto,1
+          exec-once = waybar & hyprpaper & nm-applet --indicator & /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1
+          $mod = SUPER
+          bind = $mod, RETURN, exec, kitty
+          bind = $mod, Q, killactive
+          bind = $mod, M, exit
+          bind = $mod, E, exec, chromium
+          bind = $mod, D, exec, wofi --show drun
+          bind = $mod, F, fullscreen
+          bind = $mod, V, togglefloating
+          bind = $mod, P, exec, grim -g "$(slurp)" - | wl-copy
+          bind = $mod, left, movefocus, l
+          bind = $mod, right, movefocus, r
+          bind = $mod, up, movefocus, u
+          bind = $mod, down, movefocus, d
+          bind = $mod, 1, workspace, 1
+          bind = $mod, 2, workspace, 2
+          bind = $mod, 3, workspace, 3
+          bind = $mod, 4, workspace, 4
+          bind = $mod, 5, workspace, 5
+          bind = $mod, 6, workspace, 6
+          bind = $mod, 7, workspace, 7
+          bind = $mod, 8, workspace, 8
+          bind = $mod, 9, workspace, 9
+          bind = $mod, 0, workspace, 10
+          bind = $mod SHIFT, 1, movetoworkspace, 1
+          bind = $mod SHIFT, 2, movetoworkspace, 2
+          bind = $mod SHIFT, 3, movetoworkspace, 3
+          bind = $mod SHIFT, 4, movetoworkspace, 4
+          bind = $mod SHIFT, 5, movetoworkspace, 5
+          bind = $mod SHIFT, 6, movetoworkspace, 6
+          bind = $mod SHIFT, 7, movetoworkspace, 7
+          bind = $mod SHIFT, 8, movetoworkspace, 8
+          bind = $mod SHIFT, 9, movetoworkspace, 9
+          bind = $mod SHIFT, 0, movetoworkspace, 10
+          HYPR
+
+          # Waybar config
+          cat > /tmp/profile/airootfs/root/.config/waybar/config <<'WAYBAR'
+          {
+            "layer": "top",
+            "height": 30,
+            "modules-left": ["hyprland/workspaces"],
+            "modules-center": ["clock"],
+            "modules-right": ["network", "pulseaudio", "battery"],
+            "hyprland/workspaces": { "format": "{icon}", "on-click": "activate" },
+            "clock": { "format": "{:%H:%M}" },
+            "network": { "format-wifi": "  {essid}", "format-ethernet": "  {ifname}", "format-disconnected": "  Disconnected" },
+            "pulseaudio": { "format": "{icon} {volume}%", "format-muted": " Muted" },
+            "battery": { "format": "{icon} {capacity}%", "format-charging": " {capacity}%", "format-plugged": " {capacity}%" }
+          }
+          WAYBAR
+
+          cat > /tmp/profile/airootfs/root/.config/waybar/style.css <<'STYLE'
+          * { font-family: monospace; font-size: 14px; }
+          window#waybar { background: rgba(0,0,0,0.8); color: white; }
+          STYLE
+
+          # enable NetworkManager
+          ln -sf /usr/lib/systemd/system/NetworkManager.service /tmp/profile/airootfs/etc/systemd/system/multi-user.target.wants/NetworkManager.service
+
+      - name: Build ISO
+        run: |
+          mkdir -p /out /work
+          mkarchiso -v -w /work -o /out /tmp/profile
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: omarchy-lite-iso
+          path: /out/*.iso
+          retention-days: 30
+          
